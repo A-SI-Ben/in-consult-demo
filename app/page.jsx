@@ -10,6 +10,13 @@ const EXAMPLES = [
   'Lower back pain',
 ];
 
+const DEFAULT_MODIFIERS = {
+  parental: false,
+  visibility: false,
+  other: false,
+  otherText: '',
+};
+
 export default function Page() {
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
@@ -17,20 +24,28 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lightbox, setLightbox] = useState(null);
+  const [modifiers, setModifiers] = useState(DEFAULT_MODIFIERS);
 
-  const runSearch = useCallback(async (term) => {
+  const runSearch = useCallback(async (term, mods) => {
     const t = term.trim();
     if (!t) return;
     setSubmitted(t);
     setLoading(true);
     setError('');
     setCategories([]);
+
+    const apiModifiers = {
+      parental: !!mods.parental,
+      visibility: !!mods.visibility,
+      other: mods.other && mods.otherText.trim() ? mods.otherText.trim() : '',
+    };
+
     try {
       // 1. Expand
       const expandRes = await fetch('/api/expand', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: t }),
+        body: JSON.stringify({ query: t, modifiers: apiModifiers }),
       });
       if (!expandRes.ok) throw new Error('Could not expand query');
       const { categories: cats } = await expandRes.json();
@@ -44,7 +59,12 @@ export default function Page() {
           const r = await fetch('/api/images', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: c.query, hint: c.label, originalTerm: t }),
+            body: JSON.stringify({
+              query: c.query,
+              hint: c.label,
+              originalTerm: t,
+              modifiers: apiModifiers,
+            }),
           });
           if (!r.ok) return { ...c, images: [] };
           const data = await r.json();
@@ -63,12 +83,26 @@ export default function Page() {
 
   const onSubmit = (e) => {
     e.preventDefault();
-    runSearch(query);
+    runSearch(query, modifiers);
   };
 
   const onChip = (term) => {
     setQuery(term);
-    runSearch(term);
+    runSearch(term, modifiers);
+  };
+
+  const toggleModifier = (key) => {
+    const next = { ...modifiers, [key]: !modifiers[key] };
+    setModifiers(next);
+    if (submitted) runSearch(submitted, next);
+  };
+
+  const onOtherTextChange = (text) => {
+    setModifiers(m => ({ ...m, otherText: text }));
+  };
+
+  const commitOtherText = () => {
+    if (modifiers.other && submitted) runSearch(submitted, modifiers);
   };
 
   return (
@@ -111,6 +145,46 @@ export default function Page() {
       </header>
 
       <main className="main">
+        <div className="filters" role="group" aria-label="Result modifiers">
+          <label className={`filter-checkbox${modifiers.parental ? ' is-on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={modifiers.parental}
+              onChange={() => toggleModifier('parental')}
+            />
+            <span className="filter-label">Parental</span>
+            <span className="filter-hint">child-safe</span>
+          </label>
+          <label className={`filter-checkbox${modifiers.visibility ? ' is-on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={modifiers.visibility}
+              onChange={() => toggleModifier('visibility')}
+            />
+            <span className="filter-label">Visibility</span>
+            <span className="filter-hint">larger, fewer, accessible</span>
+          </label>
+          <label className={`filter-checkbox${modifiers.other ? ' is-on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={modifiers.other}
+              onChange={() => toggleModifier('other')}
+            />
+            <span className="filter-label">Other</span>
+          </label>
+          {modifiers.other && (
+            <input
+              className="filter-other-input"
+              type="text"
+              value={modifiers.otherText}
+              onChange={(e) => onOtherTextChange(e.target.value)}
+              onBlur={commitOtherText}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitOtherText(); } }}
+              placeholder="e.g. paediatric, post-surgical, NZ context"
+            />
+          )}
+        </div>
+
         {!submitted && !loading && (
           <div className="empty">
             <div className="empty-eyebrow">For in-consult use</div>
@@ -158,9 +232,9 @@ export default function Page() {
                   <div className="row-source">{cat.source || 'Curated sources'}</div>
                 </div>
 
-                <div className="tiles">
+                <div className={`tiles${modifiers.visibility ? ' tiles-visibility' : ''}`}>
                   {cat.images === null && (
-                    Array.from({ length: 6 }).map((_, k) => (
+                    Array.from({ length: modifiers.visibility ? 3 : 6 }).map((_, k) => (
                       <div key={k} className="tile tile-skel" />
                     ))
                   )}
@@ -181,7 +255,7 @@ export default function Page() {
             ))}
 
             <div className="caveat">
-              In-Consult demo. Visual reference only — not medical advice. Sources: Wikipedia / Wikimedia Commons + curated set.
+              In-Consult demo. Visual reference only — not medical advice. Sources: Wikimedia Commons, Openverse, NLM Open-i + curated set.
             </div>
           </>
         )}

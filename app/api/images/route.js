@@ -1,88 +1,71 @@
-// /api/images — returns 5-6 image URLs for a sub-query.
+// /api/images — returns image tiles for a sub-query.
 // Strategy:
-//   1. If a curated override exists, use it.
-//   2. Otherwise query Wikimedia Commons MediaSearch for files in the File: namespace,
-//      filter to image mime types, return the thumbnail URLs.
+//   1. If a curated override exists in lib/curated.js, use it (always wins).
+//   2. Otherwise fan out across Wikimedia, Openverse, and NLM Open-i in
+//      parallel, merge with source-interleaving, dedupe by URL, and trim
+//      to the target count.
+//   3. Visibility mode: fewer tiles, prioritise drawings/illustrations.
 
 import { findCurated } from '../../../lib/curated.js';
+import { searchWikimedia } from '../../../lib/sources/wikimedia.js';
+import { searchOpenverse } from '../../../lib/sources/openverse.js';
+import { searchOpenI } from '../../../lib/sources/openi.js';
 
 export const runtime = 'edge';
 
-const UA = 'In-Consult-Demo/0.1 (https://github.com/; demo build)';
-
 export async function POST(req) {
   try {
-    const { query, hint, originalTerm } = await req.json();
+    const { query, hint, originalTerm, modifiers } = await req.json();
     if (!query || typeof query !== 'string') {
       return Response.json({ error: 'query required' }, { status: 400 });
     }
 
-    // 1. curated override
+    const visibilityMode = modifiers?.visibility === true;
+    const targetCount = visibilityMode ? 3 : 6;
+
+    // 1. Curated override — pre-vetted images always win.
     const curated = findCurated(originalTerm, hint);
     if (curated) {
-      return Response.json({ images: curated.slice(0, 6), source: 'Curated reference set' });
+      return Response.json({
+        images: curated.slice(0, targetCount),
+        source: 'Curated reference set',
+      });
     }
 
-    // 2. Wikimedia Commons search
-    const url = new URL('https://commons.wikimedia.org/w/api.php');
-    url.searchParams.set('action', 'query');
-    url.searchParams.set('format', 'json');
-    url.searchParams.set('generator', 'search');
-    url.searchParams.set('gsrsearch', `${query} filetype:bitmap|drawing`);
-    url.searchParams.set('gsrnamespace', '6');
-    url.searchParams.set('gsrlimit', '14');
-    url.searchParams.set('prop', 'imageinfo');
-    url.searchParams.set('iiprop', 'url|mime|extmetadata');
-    url.searchParams.set('iiurlwidth', '500');
-    url.searchParams.set('origin', '*');
+    // 2. Fan out across all sources in parallel. One failing source must not
+    //    kill the others, so each call is wrapped.
+    const [wm, ov, oi] = await Promise.all([
+      safe(() => searchWikimedia(query, 12)),
+      safe(() => searchOpenverse(query, 10)),
+      safe(() => searchOpenI(query, 8)),
+    ]);
 
-    const r = await fetch(url.toString(), {
-      headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+    // Interleave by source so the result set isn't dominated by whichever
+    // source happened to return the most matches.
+    let merged = interleave([wm, ov, oi]);
+
+    // De-dupe by URL.
+    const seen = new Set();
+    merged = merged.filter((img) => {
+      if (seen.has(img.url)) return false;
+      seen.add(img.url);
+      return true;
     });
 
-    if (!r.ok) {
-      return Response.json({ images: [], source: 'Wikimedia Commons (no results)' });
+    // Visibility mode: drawings/illustrations to the front.
+    if (visibilityMode) {
+      merged = [
+        ...merged.filter((i) => i.isDrawing),
+        ...merged.filter((i) => !i.isDrawing),
+      ];
     }
 
-    const data = await r.json();
-    const pages = data?.query?.pages || {};
-
-    const images = Object.values(pages)
-      .map((p) => {
-        const info = p?.imageinfo?.[0];
-        if (!info) return null;
-        const mime = info.mime || '';
-        if (!mime.startsWith('image/')) return null;
-        // Skip SVG-only icons that often render small or odd in clinical context
-        // (still allow them, but lower-rank later if we want)
-        const thumbUrl = info.thumburl || info.url;
-        if (!thumbUrl) return null;
-        const title = (p.title || '').replace(/^File:/, '');
-        const artistRaw = info.extmetadata?.Artist?.value || '';
-        const license = info.extmetadata?.LicenseShortName?.value || '';
-        const artist = stripHtml(artistRaw);
-        return {
-          url: thumbUrl,
-          fullUrl: info.url,
-          title,
-          attribution: [artist, license].filter(Boolean).join(' · ') || 'Wikimedia Commons',
-        };
-      })
-      .filter(Boolean);
-
-    // De-dupe by URL
-    const seen = new Set();
-    const deduped = [];
-    for (const img of images) {
-      if (seen.has(img.url)) continue;
-      seen.add(img.url);
-      deduped.push(img);
-      if (deduped.length >= 6) break;
-    }
+    const final = merged.slice(0, targetCount);
+    const sourcesUsed = uniq(final.map((i) => i.sourceName));
 
     return Response.json({
-      images: deduped,
-      source: 'Wikimedia Commons',
+      images: final,
+      source: sourcesUsed.length ? sourcesUsed.join(' + ') : 'No sources returned',
     });
   } catch (e) {
     console.error(e);
@@ -90,6 +73,30 @@ export async function POST(req) {
   }
 }
 
-function stripHtml(s) {
-  return String(s).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+async function safe(fn) {
+  try {
+    return (await fn()) || [];
+  } catch (e) {
+    console.error('source error', e);
+    return [];
+  }
+}
+
+function interleave(arrays) {
+  const out = [];
+  let any = true;
+  for (let i = 0; any; i++) {
+    any = false;
+    for (const arr of arrays) {
+      if (arr[i]) {
+        out.push(arr[i]);
+        any = true;
+      }
+    }
+  }
+  return out;
+}
+
+function uniq(arr) {
+  return Array.from(new Set(arr));
 }

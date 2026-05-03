@@ -24,7 +24,7 @@ Pick 4-5 categories total. Order them in the order a clinician would naturally w
 
 export async function POST(req) {
   try {
-    const { query } = await req.json();
+    const { query, modifiers } = await req.json();
     if (!query || typeof query !== 'string') {
       return Response.json({ error: 'query required' }, { status: 400 });
     }
@@ -34,6 +34,11 @@ export async function POST(req) {
       // Graceful fallback so the demo still runs without a key configured.
       return Response.json({ categories: fallbackExpansion(query) });
     }
+
+    const guidance = buildModifierGuidance(modifiers);
+    const userContent = guidance
+      ? `Clinician typed: "${query}"\n\n${guidance}`
+      : `Clinician typed: "${query}"`;
 
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -46,7 +51,7 @@ export async function POST(req) {
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 600,
         system: SYSTEM,
-        messages: [{ role: 'user', content: `Clinician typed: "${query}"` }],
+        messages: [{ role: 'user', content: userContent }],
       }),
     });
 
@@ -80,6 +85,27 @@ function safeParse(text) {
     }
     return null;
   }
+}
+
+function buildModifierGuidance(modifiers) {
+  if (!modifiers || typeof modifiers !== 'object') return '';
+  const parts = [];
+  if (modifiers.parental) {
+    parts.push(
+      'Parental mode: the patient is a child or a child is in the room. Favour clean labelled diagrams, simple anatomy, and plain-English explanation. Avoid clinical photographs of distressing visible signs (skin lesions, surgical sites, blood). It is OK to drop the "What it looks like" category for this case.'
+    );
+  }
+  if (modifiers.visibility) {
+    parts.push(
+      'Visibility mode: the viewer has restricted vision or accessibility needs. Prefer simple, high-contrast labelled diagrams over dense clinical photos. Phrase queries to surface clear illustrations. Fewer, clearer rows is better than many.'
+    );
+  }
+  const other = typeof modifiers.other === 'string' ? modifiers.other.trim() : '';
+  if (other) {
+    parts.push(`Additional clinician note: ${other}`);
+  }
+  if (!parts.length) return '';
+  return `Constraints to apply:\n- ${parts.join('\n- ')}`;
 }
 
 function fallbackExpansion(q) {

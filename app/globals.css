@@ -146,6 +146,73 @@ body {
   padding: 32px 28px 80px;
 }
 
+/* ---------- filter bar ---------- */
+.filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0 18px;
+  margin-bottom: 8px;
+}
+.filter-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  user-select: none;
+  transition: all .12s ease;
+}
+.filter-checkbox:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.filter-checkbox.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+.filter-checkbox input[type="checkbox"] {
+  accent-color: var(--accent);
+  margin: 0;
+  cursor: pointer;
+}
+.filter-label {
+  font-weight: 500;
+}
+.filter-hint {
+  font-size: 11px;
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
+}
+.filter-checkbox.is-on .filter-hint {
+  color: var(--accent);
+}
+.filter-other-input {
+  flex: 1;
+  min-width: 200px;
+  max-width: 360px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: #fff;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink);
+  outline: none;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.filter-other-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 /* empty state */
 .empty {
   text-align: center;
@@ -284,6 +351,23 @@ body {
 }
 @media (max-width: 640px) {
   .tiles { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* visibility mode: fewer columns => larger tiles, more breathing room */
+.tiles.tiles-visibility {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+@media (max-width: 1024px) {
+  .tiles.tiles-visibility { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .tiles.tiles-visibility { grid-template-columns: 1fr; }
+}
+.tiles.tiles-visibility .tile img {
+  object-fit: contain;
+  background: #fff;
+  padding: 6px;
 }
 
 .tile {
