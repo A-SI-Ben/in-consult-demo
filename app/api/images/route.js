@@ -13,13 +13,12 @@ import {
   ALWAYS_EXCLUDE,
   PG_EXTRA_EXCLUDE,
 } from '../../../lib/modifiers.js';
-import { searchWikimedia } from '../../../lib/sources/wikimedia.js';
-import { searchOpenverse } from '../../../lib/sources/openverse.js';
+import { searchGoogle } from '../../../lib/sources/google.js';
 import { searchOpenI } from '../../../lib/sources/openi.js';
 
 export const runtime = 'edge';
 
-const SOURCE_TIMEOUT_MS = 1500;
+const SOURCE_TIMEOUT_MS = 2500; // Google CSE can be slower than the others; raised from 1500
 
 export async function POST(req) {
   try {
@@ -77,23 +76,20 @@ async function fetchRow({ term, cat, queryAppends, exclude, forceDrawings, targe
   const queryParts = [term, cat.queryModifier, ...queryAppends, UNIVERSAL_APPEND];
   const query = queryParts.filter(Boolean).join(' ');
 
-  // Openverse special-case: it returns 0 results for any query with a modifier
-  // word (verified empirically), so we always send it the bare term. Cross-row
-  // dedupe distributes its contribution across rows naturally.
-  const [wm, ov, oi] = await Promise.all([
-    timed(() => searchWikimedia(query, 8)),
-    timed(() => searchOpenverse(term, 8)),
+  // Two-source fan-out: Google CSE for breadth + relevance, NLM Open-i for
+  // medical-specialty paper figures Google ranks lower. Run in parallel.
+  const [g, oi] = await Promise.all([
+    timed(() => searchGoogle(query, 10)),
     timed(() => searchOpenI(query, 6)),
   ]);
 
   const rawCounts = {
-    wikimedia: wm.length,
-    openverse: ov.length,
+    google: g.length,
     openi: oi.length,
   };
 
   // Interleave + dedupe within row.
-  let images = dedupe(interleave([wm, ov, oi]));
+  let images = dedupe(interleave([g, oi]));
   const beforeFilter = images.length;
 
   // Apply exclude filter.

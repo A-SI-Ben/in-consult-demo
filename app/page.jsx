@@ -199,7 +199,7 @@ export default function Page() {
               <span className="meta">
                 {loading
                   ? 'Composing views…'
-                  : `${visibleCategories.length} ${visibleCategories.length === 1 ? 'view' : 'views'} · Wikimedia Commons, Openverse, NLM Open-i`}
+                  : `${visibleCategories.length} ${visibleCategories.length === 1 ? 'view' : 'views'} · Google Search, NLM Open-i`}
               </span>
             </div>
 
@@ -246,8 +246,7 @@ export default function Page() {
                     <div className="debug-row">
                       <span className="debug-key">raw</span>
                       <code className="debug-val">
-                        wikimedia: {cat.debug.rawCounts?.wikimedia ?? 0} ·{' '}
-                        openverse: {cat.debug.rawCounts?.openverse ?? 0} ·{' '}
+                        google: {cat.debug.rawCounts?.google ?? 0} ·{' '}
                         open-i: {cat.debug.rawCounts?.openi ?? 0}
                       </code>
                     </div>
@@ -264,7 +263,7 @@ export default function Page() {
             ))}
 
             <div className="caveat">
-              Visual reference only — not a substitute for medical advice. Sources: Wikimedia Commons, Openverse, NLM Open-i + curated set.
+              Visual reference only — not a substitute for medical advice. Sources: Google Search, NLM Open-i + curated set.
             </div>
           </>
         )}
