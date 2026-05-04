@@ -1,22 +1,41 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { CATEGORIES, MODIFIERS } from '../lib/modifiers.js';
 
 const DEFAULT_MODIFIERS = {
-  parental: false,
+  pg: false,
   visibility: false,
   other: false,
   otherText: '',
 };
 
+// Skeleton rows the client knows about up-front, so the layout snaps in place
+// the instant Show is pressed (no waiting for the server to tell us what rows
+// exist — that's already determined by lib/modifiers.js).
+const SKELETON_ROWS = CATEGORIES.map((c) => ({
+  label: c.label,
+  images: null,
+  source: '',
+}));
+
 export default function Page() {
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
-  const [categories, setCategories] = useState([]); // [{label, query, source, images}]
+  const [categories, setCategories] = useState([]); // [{label, query, source, images, debug}]
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lightbox, setLightbox] = useState(null);
   const [modifiers, setModifiers] = useState(DEFAULT_MODIFIERS);
+  const [debug, setDebug] = useState(false);
+
+  // ?debug=1 toggles the per-row query / counts panel
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      setDebug(params.get('debug') === '1');
+    }
+  }, []);
 
   const runSearch = useCallback(async (term, mods) => {
     const t = term.trim();
@@ -24,39 +43,22 @@ export default function Page() {
     setSubmitted(t);
     setLoading(true);
     setError('');
-    setCategories([]);
+    setCategories(SKELETON_ROWS); // skeletons appear immediately
 
     const apiModifiers = {
-      parental: !!mods.parental,
+      pg: !!mods.pg,
       visibility: !!mods.visibility,
       other: mods.other && mods.otherText.trim() ? mods.otherText.trim() : '',
     };
 
     try {
-      // 1. Expand
-      const expandRes = await fetch('/api/expand', {
+      const res = await fetch('/api/images', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: t, modifiers: apiModifiers }),
+        body: JSON.stringify({ originalTerm: t, modifiers: apiModifiers }),
       });
-      if (!expandRes.ok) throw new Error('Could not expand query');
-      const { categories: cats } = await expandRes.json();
-
-      // Show categories with skeletons immediately
-      setCategories(cats.map(c => ({ ...c, images: null })));
-
-      // 2. Single batched image request — server fans out per row internally
-      const imgRes = await fetch('/api/images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          originalTerm: t,
-          categories: cats,
-          modifiers: apiModifiers,
-        }),
-      });
-      if (!imgRes.ok) throw new Error('Could not fetch images');
-      const { categories: filled } = await imgRes.json();
+      if (!res.ok) throw new Error('Could not fetch images');
+      const { categories: filled } = await res.json();
       setCategories(
         (filled || []).map((row) => ({ ...row, images: row.images || [] }))
       );
@@ -79,12 +81,24 @@ export default function Page() {
   };
 
   const onOtherTextChange = (text) => {
-    setModifiers(m => ({ ...m, otherText: text }));
+    setModifiers((m) => ({ ...m, otherText: text }));
   };
 
   const commitOtherText = () => {
     if (modifiers.other && submitted) runSearch(submitted, modifiers);
   };
+
+  // While loading: show all skeleton rows. After loading: hide rows with no images.
+  const visibleCategories = useMemo(() => {
+    if (loading) return categories;
+    return categories.filter((c) => c.images === null || c.images.length > 0);
+  }, [categories, loading]);
+
+  const allEmpty =
+    !loading &&
+    submitted &&
+    categories.length > 0 &&
+    categories.every((c) => Array.isArray(c.images) && c.images.length === 0);
 
   return (
     <>
@@ -120,21 +134,21 @@ export default function Page() {
 
           <div className="header-meta">
             <span className="header-meta-dot" />
-            <span>Live</span>
+            <span>{debug ? 'Debug' : 'Live'}</span>
           </div>
         </div>
       </header>
 
       <main className="main">
         <div className="filters" role="group" aria-label="Result modifiers">
-          <label className={`filter-checkbox${modifiers.parental ? ' is-on' : ''}`}>
+          <label className={`filter-checkbox${modifiers.pg ? ' is-on' : ''}`}>
             <input
               type="checkbox"
-              checked={modifiers.parental}
-              onChange={() => toggleModifier('parental')}
+              checked={modifiers.pg}
+              onChange={() => toggleModifier('pg')}
             />
-            <span className="filter-label">Parental</span>
-            <span className="filter-hint">child-safe</span>
+            <span className="filter-label">{MODIFIERS.pg.label}</span>
+            <span className="filter-hint">{MODIFIERS.pg.hint}</span>
           </label>
           <label className={`filter-checkbox${modifiers.visibility ? ' is-on' : ''}`}>
             <input
@@ -142,8 +156,8 @@ export default function Page() {
               checked={modifiers.visibility}
               onChange={() => toggleModifier('visibility')}
             />
-            <span className="filter-label">Visibility</span>
-            <span className="filter-hint">larger, fewer, accessible</span>
+            <span className="filter-label">{MODIFIERS.visibility.label}</span>
+            <span className="filter-hint">{MODIFIERS.visibility.hint}</span>
           </label>
           <label className={`filter-checkbox${modifiers.other ? ' is-on' : ''}`}>
             <input
@@ -151,7 +165,7 @@ export default function Page() {
               checked={modifiers.other}
               onChange={() => toggleModifier('other')}
             />
-            <span className="filter-label">Other</span>
+            <span className="filter-label">{MODIFIERS.other.label}</span>
           </label>
           {modifiers.other && (
             <input
@@ -183,21 +197,20 @@ export default function Page() {
             <div className="result-head">
               <h2>{submitted}</h2>
               <span className="meta">
-                {categories.length > 0
-                  ? `${categories.length} views · Wikimedia Commons, Openverse, NLM Open-i`
-                  : 'Composing views…'}
+                {loading
+                  ? 'Composing views…'
+                  : `${visibleCategories.length} ${visibleCategories.length === 1 ? 'view' : 'views'} · Wikimedia Commons, Openverse, NLM Open-i`}
               </span>
             </div>
 
-            {loading && categories.length === 0 && (
+            {allEmpty && (
               <div className="loading-wrap">
-                <div className="spinner" />
-                Expanding query into clinical views…
+                No matches for that term across our sources. Try rephrasing, or remove modifiers.
               </div>
             )}
 
-            {categories.map((cat, i) => (
-              <section key={i} className="row">
+            {visibleCategories.map((cat, i) => (
+              <section key={`${cat.label}-${i}`} className="row">
                 <div className="row-head">
                   <div className="row-title">
                     <h3>{cat.label}</h3>
@@ -205,20 +218,14 @@ export default function Page() {
                       <span className="row-pill">{cat.images.length}</span>
                     )}
                   </div>
-                  <div className="row-source">{cat.source || 'Curated sources'}</div>
+                  <div className="row-source">{cat.source || 'Sourcing…'}</div>
                 </div>
 
                 <div className={`tiles${modifiers.visibility ? ' tiles-visibility' : ''}`}>
-                  {cat.images === null && (
+                  {cat.images === null &&
                     Array.from({ length: modifiers.visibility ? 3 : 4 }).map((_, k) => (
                       <div key={k} className="tile tile-skel" />
-                    ))
-                  )}
-                  {cat.images !== null && cat.images.length === 0 && (
-                    <div className="tile tile-empty">
-                      No matches for this view. Try rephrasing the term, or remove modifiers.
-                    </div>
-                  )}
+                    ))}
                   {cat.images && cat.images.map((img, k) => (
                     <div
                       key={k}
@@ -229,6 +236,30 @@ export default function Page() {
                     </div>
                   ))}
                 </div>
+
+                {debug && cat.debug && (
+                  <div className="debug-panel">
+                    <div className="debug-row">
+                      <span className="debug-key">query</span>
+                      <code className="debug-val">{cat.debug.query}</code>
+                    </div>
+                    <div className="debug-row">
+                      <span className="debug-key">raw</span>
+                      <code className="debug-val">
+                        wikimedia: {cat.debug.rawCounts?.wikimedia ?? 0} ·{' '}
+                        openverse: {cat.debug.rawCounts?.openverse ?? 0} ·{' '}
+                        open-i: {cat.debug.rawCounts?.openi ?? 0}
+                      </code>
+                    </div>
+                    <div className="debug-row">
+                      <span className="debug-key">filter</span>
+                      <code className="debug-val">
+                        {cat.debug.beforeFilter ?? 0} → {cat.debug.finalCount ?? 0}
+                        {' '}({cat.debug.filteredOut ?? 0} dropped by exclude regex)
+                      </code>
+                    </div>
+                  </div>
+                )}
               </section>
             ))}
 

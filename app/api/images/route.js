@@ -1,20 +1,18 @@
-// /api/images — fetches image tiles for an entire result set in one call.
+// /api/images — deterministic image search.
 //
-// Request body: { originalTerm, categories: [{label, query}, ...], modifiers }
-// Response:     { categories: [{label, query, images, source}, ...] }
+// Request:  { originalTerm, modifiers: { pg, visibility, other } }
+// Response: { categories: [{label, query, source, images, debug}, ...] }
 //
-// Per row:
-//   1. Curated override always wins.
-//   2. Fan out the LLM sub-query across Wikimedia / Openverse / NLM Open-i.
-//   3. If the row came back with <2 results, fall back to the bare clinical
-//      term. Sub-query results keep the front slots so the row stays on-topic.
-//   4. Score by category: rows with "diagram"/"anatomy"/"schematic" labels
-//      prefer SVG / illustration content; "clinical"/"what it looks like"
-//      rows prefer photographs. Visibility mode forces drawings to the front.
-//   5. Per-source 1.5s soft timeout so a slow source can't stall a row.
-//   6. Cross-row dedupe so the same image doesn't appear in two rows.
+// Reads lib/modifiers.js for the category set, query templates, and exclude
+// regexes. No LLM in the path — same input always yields the same query.
 
-import { findCurated } from '../../../lib/curated.js';
+import {
+  CATEGORIES,
+  UNIVERSAL_APPEND,
+  MODIFIERS,
+  ALWAYS_EXCLUDE,
+  PG_EXTRA_EXCLUDE,
+} from '../../../lib/modifiers.js';
 import { searchWikimedia } from '../../../lib/sources/wikimedia.js';
 import { searchOpenverse } from '../../../lib/sources/openverse.js';
 import { searchOpenI } from '../../../lib/sources/openi.js';
@@ -25,27 +23,39 @@ const SOURCE_TIMEOUT_MS = 1500;
 
 export async function POST(req) {
   try {
-    const { originalTerm, categories, modifiers } = await req.json();
-    if (!Array.isArray(categories) || categories.length === 0) {
-      return Response.json({ categories: [] });
+    const { originalTerm, modifiers = {} } = await req.json();
+    if (!originalTerm || typeof originalTerm !== 'string') {
+      return Response.json({ error: 'originalTerm required' }, { status: 400 });
+    }
+    const term = originalTerm.trim();
+
+    // Compose query appends from active modifiers.
+    const queryAppends = [];
+    if (modifiers.pg) queryAppends.push(MODIFIERS.pg.queryAppend);
+    if (modifiers.visibility) queryAppends.push(MODIFIERS.visibility.queryAppend);
+    if (
+      typeof modifiers.other === 'string' &&
+      modifiers.other.trim()
+    ) {
+      queryAppends.push(modifiers.other.trim());
     }
 
-    const visibilityMode = modifiers?.visibility === true;
+    // Compose the exclude regex for this request.
+    const exclude = modifiers.pg
+      ? new RegExp(`${ALWAYS_EXCLUDE.source}|${PG_EXTRA_EXCLUDE.source}`, 'i')
+      : ALWAYS_EXCLUDE;
+
+    const visibilityMode = !!modifiers.visibility;
+    const forceDrawings = !!(modifiers.pg || modifiers.visibility);
     const targetCount = visibilityMode ? 3 : 4;
 
     const filled = await Promise.all(
-      categories.map((cat) =>
-        fetchRow({
-          query: cat.query,
-          label: cat.label,
-          originalTerm,
-          visibilityMode,
-          targetCount,
-        })
+      CATEGORIES.map((cat) =>
+        fetchRow({ term, cat, queryAppends, exclude, forceDrawings, targetCount })
       )
     );
 
-    // Cross-row dedupe — same image must not appear in two rows.
+    // Cross-row dedupe so the same image doesn't show in two rows.
     const seen = new Set();
     const deduped = filled.map((row) => ({
       ...row,
@@ -63,54 +73,57 @@ export async function POST(req) {
   }
 }
 
-async function fetchRow({ query, label, originalTerm, visibilityMode, targetCount }) {
-  const baseRow = { label, query };
+async function fetchRow({ term, cat, queryAppends, exclude, forceDrawings, targetCount }) {
+  const queryParts = [term, cat.queryModifier, ...queryAppends, UNIVERSAL_APPEND];
+  const query = queryParts.filter(Boolean).join(' ');
 
-  // 1. Curated override
-  const curated = findCurated(originalTerm, label);
-  if (curated) {
-    return {
-      ...baseRow,
-      images: curated.slice(0, targetCount),
-      source: 'Curated reference set',
-    };
-  }
+  const [wm, ov, oi] = await Promise.all([
+    timed(() => searchWikimedia(query, 8)),
+    timed(() => searchOpenverse(query, 8)),
+    timed(() => searchOpenI(query, 6)),
+  ]);
 
-  // 2. Sub-query fan-out
-  let results = await fanOut(query);
+  const rawCounts = {
+    wikimedia: wm.length,
+    openverse: ov.length,
+    openi: oi.length,
+  };
 
-  // 3. Conditional fallback — only when the sub-query came up nearly empty
-  if (
-    results.length < 2 &&
-    originalTerm &&
-    originalTerm.toLowerCase() !== query.toLowerCase()
-  ) {
-    const fallback = await fanOut(originalTerm);
-    results = dedupe(results.concat(fallback));
+  // Interleave + dedupe within row.
+  let images = dedupe(interleave([wm, ov, oi]));
+  const beforeFilter = images.length;
+
+  // Apply exclude filter.
+  images = images.filter((img) => {
+    const haystack = [img.title, img.attribution].filter(Boolean).join(' ');
+    return !exclude.test(haystack);
+  });
+  const filteredOut = beforeFilter - images.length;
+
+  // Drawings preferred? Per-category default plus modifier override.
+  const wantsDrawing = forceDrawings || cat.prefersDrawings;
+  if (wantsDrawing) {
+    images = [
+      ...images.filter((i) => i.isDrawing),
+      ...images.filter((i) => !i.isDrawing),
+    ];
   } else {
-    results = dedupe(results);
+    images = [
+      ...images.filter((i) => !i.isDrawing),
+      ...images.filter((i) => i.isDrawing),
+    ];
   }
 
-  // 4. Category-aware scoring
-  results = scoreByCategory(results, label, visibilityMode);
-
-  const final = results.slice(0, targetCount);
+  const final = images.slice(0, targetCount);
   const sourcesUsed = uniq(final.map((i) => i.sourceName));
 
   return {
-    ...baseRow,
+    label: cat.label,
+    query,
     images: final,
     source: sourcesUsed.length ? sourcesUsed.join(' + ') : 'No matches',
+    debug: { query, rawCounts, beforeFilter, filteredOut, finalCount: final.length },
   };
-}
-
-async function fanOut(q) {
-  const [wm, ov, oi] = await Promise.all([
-    timed(() => searchWikimedia(q, 8)),
-    timed(() => searchOpenverse(q, 8)),
-    timed(() => searchOpenI(q, 6)),
-  ]);
-  return interleave([wm, ov, oi]);
 }
 
 function timed(fn) {
@@ -151,29 +164,6 @@ function dedupe(images) {
     seen.add(img.url);
     return true;
   });
-}
-
-function scoreByCategory(images, label, visibilityMode) {
-  const l = (label || '').toLowerCase();
-  const wantsDrawing =
-    visibilityMode ||
-    /diagram|schematic|illustration|drawing|figure|anatomy|self.?care|exercise|patient.explanation/.test(l);
-  const wantsPhoto =
-    !wantsDrawing && /what it looks like|clinical|photo|x.?ray|treatment/.test(l);
-
-  if (wantsDrawing) {
-    return [
-      ...images.filter((i) => i.isDrawing),
-      ...images.filter((i) => !i.isDrawing),
-    ];
-  }
-  if (wantsPhoto) {
-    return [
-      ...images.filter((i) => !i.isDrawing),
-      ...images.filter((i) => i.isDrawing),
-    ];
-  }
-  return images;
 }
 
 function uniq(arr) {
