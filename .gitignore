@@ -3,3 +3,10 @@ node_modules
 .env*.local
 .vercel
 .DS_Store
+
+# Briefing docs for Claude Code sessions — local only, not for GitHub
+CLAUDE.md
+CLAUDE.legacy.md
+
+# Claude Code tooling (preview launch config)
+.claude/

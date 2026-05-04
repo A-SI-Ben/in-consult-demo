@@ -13,7 +13,7 @@ import {
   ALWAYS_EXCLUDE,
   PG_EXTRA_EXCLUDE,
 } from '../../../lib/modifiers.js';
-import { searchGoogle } from '../../../lib/sources/google.js';
+import { searchBrave } from '../../../lib/sources/brave.js';
 import { searchOpenI } from '../../../lib/sources/openi.js';
 
 export const runtime = 'edge';
@@ -76,20 +76,27 @@ async function fetchRow({ term, cat, queryAppends, exclude, forceDrawings, targe
   const queryParts = [term, cat.queryModifier, ...queryAppends, UNIVERSAL_APPEND];
   const query = queryParts.filter(Boolean).join(' ');
 
-  // Two-source fan-out: Google CSE for breadth + relevance, NLM Open-i for
-  // medical-specialty paper figures Google ranks lower. Run in parallel.
-  const [g, oi] = await Promise.all([
-    timed(() => searchGoogle(query, 10)),
+  // Two-source fan-out: Brave for breadth + relevance, NLM Open-i for
+  // medical-specialty paper figures Brave ranks lower. Run in parallel.
+  //
+  // Why we ask Brave for 40 results rather than ~10: the stock-photo filter
+  // in lib/sources/brave.js strips out vecteezy/getty/istock/etc., which
+  // dominate the top of many medical image queries (especially derm). Asking
+  // for more raw candidates means the filter has more material to leave
+  // behind. Brave's API allows up to 100 per request and the free tier
+  // doesn't charge per result, only per query.
+  const [b, oi] = await Promise.all([
+    timed(() => searchBrave(query, 40)),
     timed(() => searchOpenI(query, 6)),
   ]);
 
   const rawCounts = {
-    google: g.length,
+    brave: b.length,
     openi: oi.length,
   };
 
   // Interleave + dedupe within row.
-  let images = dedupe(interleave([g, oi]));
+  let images = dedupe(interleave([b, oi]));
   const beforeFilter = images.length;
 
   // Apply exclude filter.

@@ -184,7 +184,7 @@ export default function Page() {
           <div className="empty">
             <div className="empty-eyebrow">For in-consult use</div>
             <h1>Show your patient a clean, curated explanation.</h1>
-            <p>Type a condition. We expand it into the three views you'd actually point to in the room — a diagram, an overview image, and treatment — pulled from clinically curated sources.</p>
+            <p>Type a condition. We expand it into the two views you'd actually point to in the room — a diagram and an overview image — pulled from clinically curated sources.</p>
           </div>
         )}
 
@@ -199,7 +199,7 @@ export default function Page() {
               <span className="meta">
                 {loading
                   ? 'Composing views…'
-                  : `${visibleCategories.length} ${visibleCategories.length === 1 ? 'view' : 'views'} · Google Search, NLM Open-i`}
+                  : `${visibleCategories.length} ${visibleCategories.length === 1 ? 'view' : 'views'} · Brave Search, NLM Open-i`}
               </span>
             </div>
 
@@ -246,7 +246,7 @@ export default function Page() {
                     <div className="debug-row">
                       <span className="debug-key">raw</span>
                       <code className="debug-val">
-                        google: {cat.debug.rawCounts?.google ?? 0} ·{' '}
+                        brave: {cat.debug.rawCounts?.brave ?? 0} ·{' '}
                         open-i: {cat.debug.rawCounts?.openi ?? 0}
                       </code>
                     </div>
@@ -263,7 +263,7 @@ export default function Page() {
             ))}
 
             <div className="caveat">
-              Visual reference only — not a substitute for medical advice. Sources: Google Search, NLM Open-i + curated set.
+              Visual reference only — not a substitute for medical advice. Sources: Brave Search, NLM Open-i + curated set.
             </div>
           </>
         )}
