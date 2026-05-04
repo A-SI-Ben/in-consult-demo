@@ -1,10 +1,15 @@
 // /api/images — returns image tiles for a sub-query.
+//
 // Strategy:
-//   1. If a curated override exists in lib/curated.js, use it (always wins).
+//   1. Curated override always wins.
 //   2. Otherwise fan out across Wikimedia, Openverse, and NLM Open-i in
-//      parallel, merge with source-interleaving, dedupe by URL, and trim
-//      to the target count.
-//   3. Visibility mode: fewer tiles, prioritise drawings/illustrations.
+//      parallel for BOTH the LLM-generated sub-query AND the bare clinical
+//      term. The sub-query gives us context (e.g. "greenstick fracture x-ray"
+//      for the "What it looks like" row), the bare term guarantees we get
+//      *something* if the sub-query is too narrow for any source's metadata.
+//   3. Merge: sub-query results take the front slots; bare-term results fill
+//      in behind, deduped by URL.
+//   4. Visibility mode: fewer tiles, prioritise drawings/illustrations.
 
 import { findCurated } from '../../../lib/curated.js';
 import { searchWikimedia } from '../../../lib/sources/wikimedia.js';
@@ -23,7 +28,7 @@ export async function POST(req) {
     const visibilityMode = modifiers?.visibility === true;
     const targetCount = visibilityMode ? 3 : 6;
 
-    // 1. Curated override — pre-vetted images always win.
+    // 1. Curated override.
     const curated = findCurated(originalTerm, hint);
     if (curated) {
       return Response.json({
@@ -32,17 +37,29 @@ export async function POST(req) {
       });
     }
 
-    // 2. Fan out across all sources in parallel. One failing source must not
-    //    kill the others, so each call is wrapped.
-    const [wm, ov, oi] = await Promise.all([
-      safe(() => searchWikimedia(query, 12)),
-      safe(() => searchOpenverse(query, 10)),
-      safe(() => searchOpenI(query, 8)),
-    ]);
+    // 2. Fan out: sub-query AND (if different) bare term, all sources, parallel.
+    const queries = [query];
+    const bareTerm = (originalTerm || '').trim();
+    if (bareTerm && bareTerm.toLowerCase() !== query.toLowerCase()) {
+      queries.push(bareTerm);
+    }
 
-    // Interleave by source so the result set isn't dominated by whichever
-    // source happened to return the most matches.
-    let merged = interleave([wm, ov, oi]);
+    const fanouts = await Promise.all(
+      queries.map((q) =>
+        Promise.all([
+          safe(() => searchWikimedia(q, 12)),
+          safe(() => searchOpenverse(q, 10)),
+          safe(() => searchOpenI(q, 8)),
+        ])
+      )
+    );
+
+    // Interleave each query's source results so no one source dominates,
+    // then concat queries in order so sub-query wins the top slots.
+    let merged = [];
+    for (const sourceArrays of fanouts) {
+      merged = merged.concat(interleave(sourceArrays));
+    }
 
     // De-dupe by URL.
     const seen = new Set();
@@ -65,7 +82,7 @@ export async function POST(req) {
 
     return Response.json({
       images: final,
-      source: sourcesUsed.length ? sourcesUsed.join(' + ') : 'No sources returned',
+      source: sourcesUsed.length ? sourcesUsed.join(' + ') : 'No matches',
     });
   } catch (e) {
     console.error(e);

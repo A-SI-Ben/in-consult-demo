@@ -139,7 +139,7 @@ export default function Page() {
 
           <div className="header-meta">
             <span className="header-meta-dot" />
-            <span>Demo mode</span>
+            <span>Live</span>
           </div>
         </div>
       </header>
@@ -208,7 +208,7 @@ export default function Page() {
               <h2>{submitted}</h2>
               <span className="meta">
                 {categories.length > 0
-                  ? `${categories.length} views, sourced from clinically curated references`
+                  ? `${categories.length} views · Wikimedia Commons, Openverse, NLM Open-i`
                   : 'Composing views…'}
               </span>
             </div>
@@ -239,7 +239,9 @@ export default function Page() {
                     ))
                   )}
                   {cat.images !== null && cat.images.length === 0 && (
-                    <div className="tile tile-empty">No clean results in demo set.</div>
+                    <div className="tile tile-empty">
+                      No matches for this view. Try rephrasing the term, or remove modifiers.
+                    </div>
                   )}
                   {cat.images && cat.images.map((img, k) => (
                     <div
@@ -255,7 +257,7 @@ export default function Page() {
             ))}
 
             <div className="caveat">
-              In-Consult demo. Visual reference only — not medical advice. Sources: Wikimedia Commons, Openverse, NLM Open-i + curated set.
+              Visual reference only — not a substitute for medical advice. Sources: Wikimedia Commons, Openverse, NLM Open-i + curated set.
             </div>
           </>
         )}
@@ -263,8 +265,20 @@ export default function Page() {
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)}>
-          <img src={lightbox.url} alt="" />
-          <div className="lightbox-caption">{lightbox.label} — {lightbox.attribution || 'source attached'}</div>
+          <img src={lightbox.fullUrl || lightbox.url} alt="" onClick={(e) => e.stopPropagation()} />
+          <div className="lightbox-caption" onClick={(e) => e.stopPropagation()}>
+            <span>{lightbox.label} — {lightbox.attribution || 'source attached'}</span>
+            {lightbox.fullUrl && (
+              <a
+                className="lightbox-source"
+                href={lightbox.fullUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View source ↗
+              </a>
+            )}
+          </div>
         </div>
       )}
     </>
