@@ -77,9 +77,12 @@ async function fetchRow({ term, cat, queryAppends, exclude, forceDrawings, targe
   const queryParts = [term, cat.queryModifier, ...queryAppends, UNIVERSAL_APPEND];
   const query = queryParts.filter(Boolean).join(' ');
 
+  // Openverse special-case: it returns 0 results for any query with a modifier
+  // word (verified empirically), so we always send it the bare term. Cross-row
+  // dedupe distributes its contribution across rows naturally.
   const [wm, ov, oi] = await Promise.all([
     timed(() => searchWikimedia(query, 8)),
-    timed(() => searchOpenverse(query, 8)),
+    timed(() => searchOpenverse(term, 8)),
     timed(() => searchOpenI(query, 6)),
   ]);
 
