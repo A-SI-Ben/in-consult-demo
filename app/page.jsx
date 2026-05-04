@@ -45,27 +45,21 @@ export default function Page() {
       // Show categories with skeletons immediately
       setCategories(cats.map(c => ({ ...c, images: null })));
 
-      // 2. Fetch images per category in parallel
-      const filled = await Promise.all(cats.map(async (c) => {
-        try {
-          const r = await fetch('/api/images', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              query: c.query,
-              hint: c.label,
-              originalTerm: t,
-              modifiers: apiModifiers,
-            }),
-          });
-          if (!r.ok) return { ...c, images: [] };
-          const data = await r.json();
-          return { ...c, images: data.images || [], source: data.source || c.source };
-        } catch {
-          return { ...c, images: [] };
-        }
-      }));
-      setCategories(filled);
+      // 2. Single batched image request — server fans out per row internally
+      const imgRes = await fetch('/api/images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          originalTerm: t,
+          categories: cats,
+          modifiers: apiModifiers,
+        }),
+      });
+      if (!imgRes.ok) throw new Error('Could not fetch images');
+      const { categories: filled } = await imgRes.json();
+      setCategories(
+        (filled || []).map((row) => ({ ...row, images: row.images || [] }))
+      );
     } catch (e) {
       setError(e.message || 'Something went wrong');
     } finally {

@@ -1,15 +1,18 @@
-// /api/images — returns image tiles for a sub-query.
+// /api/images — fetches image tiles for an entire result set in one call.
 //
-// Strategy:
+// Request body: { originalTerm, categories: [{label, query}, ...], modifiers }
+// Response:     { categories: [{label, query, images, source}, ...] }
+//
+// Per row:
 //   1. Curated override always wins.
-//   2. Otherwise fan out across Wikimedia, Openverse, and NLM Open-i in
-//      parallel for BOTH the LLM-generated sub-query AND the bare clinical
-//      term. The sub-query gives us context (e.g. "greenstick fracture x-ray"
-//      for the "What it looks like" row), the bare term guarantees we get
-//      *something* if the sub-query is too narrow for any source's metadata.
-//   3. Merge: sub-query results take the front slots; bare-term results fill
-//      in behind, deduped by URL.
-//   4. Visibility mode: fewer tiles, prioritise drawings/illustrations.
+//   2. Fan out the LLM sub-query across Wikimedia / Openverse / NLM Open-i.
+//   3. If the row came back with <2 results, fall back to the bare clinical
+//      term. Sub-query results keep the front slots so the row stays on-topic.
+//   4. Score by category: rows with "diagram"/"anatomy"/"schematic" labels
+//      prefer SVG / illustration content; "clinical"/"what it looks like"
+//      rows prefer photographs. Visibility mode forces drawings to the front.
+//   5. Per-source 1.5s soft timeout so a slow source can't stall a row.
+//   6. Cross-row dedupe so the same image doesn't appear in two rows.
 
 import { findCurated } from '../../../lib/curated.js';
 import { searchWikimedia } from '../../../lib/sources/wikimedia.js';
@@ -18,76 +21,103 @@ import { searchOpenI } from '../../../lib/sources/openi.js';
 
 export const runtime = 'edge';
 
+const SOURCE_TIMEOUT_MS = 1500;
+
 export async function POST(req) {
   try {
-    const { query, hint, originalTerm, modifiers } = await req.json();
-    if (!query || typeof query !== 'string') {
-      return Response.json({ error: 'query required' }, { status: 400 });
+    const { originalTerm, categories, modifiers } = await req.json();
+    if (!Array.isArray(categories) || categories.length === 0) {
+      return Response.json({ categories: [] });
     }
 
     const visibilityMode = modifiers?.visibility === true;
     const targetCount = visibilityMode ? 3 : 4;
 
-    // 1. Curated override.
-    const curated = findCurated(originalTerm, hint);
-    if (curated) {
-      return Response.json({
-        images: curated.slice(0, targetCount),
-        source: 'Curated reference set',
-      });
-    }
-
-    // 2. Fan out: sub-query AND (if different) bare term, all sources, parallel.
-    const queries = [query];
-    const bareTerm = (originalTerm || '').trim();
-    if (bareTerm && bareTerm.toLowerCase() !== query.toLowerCase()) {
-      queries.push(bareTerm);
-    }
-
-    const fanouts = await Promise.all(
-      queries.map((q) =>
-        Promise.all([
-          safe(() => searchWikimedia(q, 12)),
-          safe(() => searchOpenverse(q, 10)),
-          safe(() => searchOpenI(q, 8)),
-        ])
+    const filled = await Promise.all(
+      categories.map((cat) =>
+        fetchRow({
+          query: cat.query,
+          label: cat.label,
+          originalTerm,
+          visibilityMode,
+          targetCount,
+        })
       )
     );
 
-    // Interleave each query's source results so no one source dominates,
-    // then concat queries in order so sub-query wins the top slots.
-    let merged = [];
-    for (const sourceArrays of fanouts) {
-      merged = merged.concat(interleave(sourceArrays));
-    }
-
-    // De-dupe by URL.
+    // Cross-row dedupe — same image must not appear in two rows.
     const seen = new Set();
-    merged = merged.filter((img) => {
-      if (seen.has(img.url)) return false;
-      seen.add(img.url);
-      return true;
-    });
+    const deduped = filled.map((row) => ({
+      ...row,
+      images: row.images.filter((img) => {
+        if (seen.has(img.url)) return false;
+        seen.add(img.url);
+        return true;
+      }),
+    }));
 
-    // Visibility mode: drawings/illustrations to the front.
-    if (visibilityMode) {
-      merged = [
-        ...merged.filter((i) => i.isDrawing),
-        ...merged.filter((i) => !i.isDrawing),
-      ];
-    }
-
-    const final = merged.slice(0, targetCount);
-    const sourcesUsed = uniq(final.map((i) => i.sourceName));
-
-    return Response.json({
-      images: final,
-      source: sourcesUsed.length ? sourcesUsed.join(' + ') : 'No matches',
-    });
+    return Response.json({ categories: deduped });
   } catch (e) {
-    console.error(e);
-    return Response.json({ images: [], source: 'error' }, { status: 200 });
+    console.error('images route error', e);
+    return Response.json({ categories: [], error: 'request failed' }, { status: 200 });
   }
+}
+
+async function fetchRow({ query, label, originalTerm, visibilityMode, targetCount }) {
+  const baseRow = { label, query };
+
+  // 1. Curated override
+  const curated = findCurated(originalTerm, label);
+  if (curated) {
+    return {
+      ...baseRow,
+      images: curated.slice(0, targetCount),
+      source: 'Curated reference set',
+    };
+  }
+
+  // 2. Sub-query fan-out
+  let results = await fanOut(query);
+
+  // 3. Conditional fallback — only when the sub-query came up nearly empty
+  if (
+    results.length < 2 &&
+    originalTerm &&
+    originalTerm.toLowerCase() !== query.toLowerCase()
+  ) {
+    const fallback = await fanOut(originalTerm);
+    results = dedupe(results.concat(fallback));
+  } else {
+    results = dedupe(results);
+  }
+
+  // 4. Category-aware scoring
+  results = scoreByCategory(results, label, visibilityMode);
+
+  const final = results.slice(0, targetCount);
+  const sourcesUsed = uniq(final.map((i) => i.sourceName));
+
+  return {
+    ...baseRow,
+    images: final,
+    source: sourcesUsed.length ? sourcesUsed.join(' + ') : 'No matches',
+  };
+}
+
+async function fanOut(q) {
+  const [wm, ov, oi] = await Promise.all([
+    timed(() => searchWikimedia(q, 8)),
+    timed(() => searchOpenverse(q, 8)),
+    timed(() => searchOpenI(q, 6)),
+  ]);
+  return interleave([wm, ov, oi]);
+}
+
+function timed(fn) {
+  return Promise.race([
+    safe(fn),
+    new Promise((resolve) => setTimeout(() => resolve([]), SOURCE_TIMEOUT_MS)),
+  ]);
 }
 
 async function safe(fn) {
@@ -112,6 +142,38 @@ function interleave(arrays) {
     }
   }
   return out;
+}
+
+function dedupe(images) {
+  const seen = new Set();
+  return images.filter((img) => {
+    if (seen.has(img.url)) return false;
+    seen.add(img.url);
+    return true;
+  });
+}
+
+function scoreByCategory(images, label, visibilityMode) {
+  const l = (label || '').toLowerCase();
+  const wantsDrawing =
+    visibilityMode ||
+    /diagram|schematic|illustration|drawing|figure|anatomy|self.?care|exercise|patient.explanation/.test(l);
+  const wantsPhoto =
+    !wantsDrawing && /what it looks like|clinical|photo|x.?ray|treatment/.test(l);
+
+  if (wantsDrawing) {
+    return [
+      ...images.filter((i) => i.isDrawing),
+      ...images.filter((i) => !i.isDrawing),
+    ];
+  }
+  if (wantsPhoto) {
+    return [
+      ...images.filter((i) => !i.isDrawing),
+      ...images.filter((i) => i.isDrawing),
+    ];
+  }
+  return images;
 }
 
 function uniq(arr) {
