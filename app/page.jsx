@@ -2,14 +2,6 @@
 
 import { useState, useCallback } from 'react';
 
-const EXAMPLES = [
-  'Hernia',
-  'Eczema',
-  'Plantar fasciitis',
-  'Sprained ankle',
-  'Lower back pain',
-];
-
 const DEFAULT_MODIFIERS = {
   parental: false,
   visibility: false,
@@ -84,11 +76,6 @@ export default function Page() {
   const onSubmit = (e) => {
     e.preventDefault();
     runSearch(query, modifiers);
-  };
-
-  const onChip = (term) => {
-    setQuery(term);
-    runSearch(term, modifiers);
   };
 
   const toggleModifier = (key) => {
@@ -189,12 +176,7 @@ export default function Page() {
           <div className="empty">
             <div className="empty-eyebrow">For in-consult use</div>
             <h1>Show your patient a clean, curated explanation.</h1>
-            <p>Type a condition. We expand it into the views you'd actually point to in the room — diagrams, anatomy, what it looks like, treatment paths — pulled from clinically curated sources.</p>
-            <div className="chips">
-              {EXAMPLES.map(ex => (
-                <button key={ex} className="chip" onClick={() => onChip(ex)}>{ex}</button>
-              ))}
-            </div>
+            <p>Type a condition. We expand it into the three views you'd actually point to in the room — a diagram, an overview image, and treatment — pulled from clinically curated sources.</p>
           </div>
         )}
 
@@ -234,7 +216,7 @@ export default function Page() {
 
                 <div className={`tiles${modifiers.visibility ? ' tiles-visibility' : ''}`}>
                   {cat.images === null && (
-                    Array.from({ length: modifiers.visibility ? 3 : 6 }).map((_, k) => (
+                    Array.from({ length: modifiers.visibility ? 3 : 4 }).map((_, k) => (
                       <div key={k} className="tile tile-skel" />
                     ))
                   )}

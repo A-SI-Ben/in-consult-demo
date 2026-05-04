@@ -26,7 +26,7 @@ export async function POST(req) {
     }
 
     const visibilityMode = modifiers?.visibility === true;
-    const targetCount = visibilityMode ? 3 : 6;
+    const targetCount = visibilityMode ? 3 : 4;
 
     // 1. Curated override.
     const curated = findCurated(originalTerm, hint);

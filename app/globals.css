@@ -34,7 +34,7 @@ body {
 .app-header-inner {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 14px 28px;
+  padding: 36px 28px;
   display: flex;
   align-items: center;
   gap: 24px;
@@ -151,8 +151,9 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 8px;
-  padding: 4px 0 18px;
+  padding: 4px 0 28px;
   margin-bottom: 8px;
 }
 .filter-checkbox {
@@ -343,11 +344,11 @@ body {
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
 }
 @media (max-width: 1024px) {
-  .tiles { grid-template-columns: repeat(4, 1fr); }
+  .tiles { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 640px) {
   .tiles { grid-template-columns: repeat(2, 1fr); }
@@ -371,7 +372,7 @@ body {
 }
 
 .tile {
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 2 / 3;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 8px;

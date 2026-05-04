@@ -1,26 +1,20 @@
-// /api/expand — uses Claude Haiku to fan a clinician's term out into 4-5
-// categorised sub-queries that map onto the visual rows on the page.
+// /api/expand — uses Claude Haiku to fan a clinician's term out into exactly
+// three categorised sub-queries that map onto the three visual rows on the page.
 
 export const runtime = 'edge';
 
 const SYSTEM = `You are an assistant inside a tool called In-Consult, used by GPs and physiotherapists in the consult room to show visual references to a patient.
 
-Given a clinical term the clinician typed, return 4-5 categorised sub-queries that would each surface useful patient-facing visual content. Each category should map onto a different *kind* of view a clinician might point to when explaining the diagnosis.
+Given a clinical term the clinician typed, return EXACTLY THREE categorised sub-queries. The three categories are fixed and must be returned in this order:
 
-Use these category labels where they apply (omit ones that don't fit, add others if a condition genuinely needs them):
-- "Diagrams" — labelled medical illustrations
-- "Anatomy" — relevant anatomy of the affected area
-- "What it looks like" — clinical photographs (skin conditions, visible signs)
-- "Treatment" — treatment approaches, devices, interventions
-- "Self-care & exercises" — stretches, home management (musculoskeletal especially)
-- "Patient explanation" — plain-English overview imagery
+1. "Diagram / schematic" — labelled medical illustration or schematic of the condition or affected anatomy.
+2. "Overview / image" — a clear overview image of what the condition looks like in real life (clinical photograph, presentation, or representative real-world image).
+3. "Treatment" — treatment approaches, devices, interventions, or recovery imagery.
 
-For each category, write a short search query phrased to retrieve good clean medical imagery (e.g. "inguinal hernia anatomy diagram", not just "diagram").
+For each category, write a short search query phrased to retrieve good clean medical imagery (e.g. "inguinal hernia labelled diagram", not just "diagram"). The query should bake in the condition name plus a category-appropriate qualifier.
 
-Return STRICT JSON in this exact shape, no commentary, no markdown fences:
-{"categories":[{"label":"Diagrams","query":"<query>"},{"label":"Anatomy","query":"<query>"}, ...]}
-
-Pick 4-5 categories total. Order them in the order a clinician would naturally walk a patient through them (usually: what is it / where is it → what it looks like → treatment / self-care).`;
+Return STRICT JSON in this exact shape, no commentary, no markdown fences, exactly three items in this order:
+{"categories":[{"label":"Diagram / schematic","query":"<query>"},{"label":"Overview / image","query":"<query>"},{"label":"Treatment","query":"<query>"}]}`;
 
 export async function POST(req) {
   try {
@@ -92,7 +86,7 @@ function buildModifierGuidance(modifiers) {
   const parts = [];
   if (modifiers.parental) {
     parts.push(
-      'Parental mode: the patient is a child or a child is in the room. Favour clean labelled diagrams, simple anatomy, and plain-English explanation. Avoid clinical photographs of distressing visible signs (skin lesions, surgical sites, blood). It is OK to drop the "What it looks like" category for this case.'
+      'Parental mode: the patient is a child or a child is in the room. Favour clean labelled illustrations and gentle imagery. For the "Overview / image" row, prefer cartoon, illustrated, or stylised images over clinical photos of distressing visible signs (skin lesions, surgical sites, blood).'
     );
   }
   if (modifiers.visibility) {
@@ -111,10 +105,8 @@ function buildModifierGuidance(modifiers) {
 function fallbackExpansion(q) {
   const term = q.toLowerCase();
   return [
-    { label: 'Diagrams',         query: `${term} medical diagram` },
-    { label: 'Anatomy',          query: `${term} anatomy` },
-    { label: 'What it looks like', query: `${term} clinical` },
-    { label: 'Treatment',        query: `${term} treatment` },
-    { label: 'Patient explanation', query: `${term} explanation` },
+    { label: 'Diagram / schematic', query: `${term} labelled diagram` },
+    { label: 'Overview / image',    query: `${term} clinical presentation` },
+    { label: 'Treatment',           query: `${term} treatment` },
   ];
 }
